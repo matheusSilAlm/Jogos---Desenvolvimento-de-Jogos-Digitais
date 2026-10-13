@@ -11,25 +11,23 @@ public class PlayerCar {
     private Rectangle bounds;
     private float speed;
 
-
-    public PlayerCar(Texture texture,float x, float y) {
+    public PlayerCar(Texture texture, float x, float y) {
         this.texture = texture;
         this.bounds = new Rectangle(x, y, texture.getWidth(), texture.getHeight());
         this.speed = 200; // Velocidade inicial do carro
     }
 
-
-    public void update(float deltaTime){
-        if(Gdx.input.isKeyPressed(Input.Keys.UP));{
+    public void update(float deltaTime) {
+        if (Gdx.input.isKeyPressed(Input.Keys.UP)) {
             speed += 10 * deltaTime;
         }
-        if(Gdx.input.isKeyPressed(Input.Keys.DOWN));{
+        if (Gdx.input.isKeyPressed(Input.Keys.DOWN)) {
             speed -= 10 * deltaTime;
         }
-        if(Gdx.input.isKeyPressed(Input.Keys.LEFT));{
+        if (Gdx.input.isKeyPressed(Input.Keys.LEFT)) {
             bounds.x -= 200 * deltaTime;
         }
-        if(Gdx.input.isKeyPressed(Input.Keys.RIGHT));{
+        if (Gdx.input.isKeyPressed(Input.Keys.RIGHT)) {
             bounds.x += 200 * deltaTime;
         }
     }
@@ -42,8 +40,7 @@ public class PlayerCar {
         return speed;
     }
 
-
-    public void draw(SpriteBatch batch){
-        batch.draw(texture, bounds.x,bounds.y);
+    public void draw(SpriteBatch batch) {
+        batch.draw(texture, bounds.x, bounds.y);
     }
 }
