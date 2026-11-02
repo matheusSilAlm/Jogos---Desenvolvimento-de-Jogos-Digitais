@@ -5,12 +5,14 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Preferences;
 
 /**
- * Classe principal do jogo Tetris Edicao Sovietica X68000 (1987-1988).
- * Gerencia ciclo de vida, audio e telas de Menu e Gameplay.
+ * Classe principal do jogo Tetris Edicao Sovietica 1987.
+ * Gerencia ciclo de vida, audio, configuracoes e transicao de telas.
  */
 public class TetrisGame extends Game {
     private AudioManager audioManager;
     private Preferences preferences;
+    private int startingLevel = 1;
+    private boolean challengeMode = false;
 
     @Override
     public void create() {
@@ -33,6 +35,22 @@ public class TetrisGame extends Game {
 
     public Preferences getPreferences() {
         return preferences;
+    }
+
+    public int getStartingLevel() {
+        return startingLevel;
+    }
+
+    public void setStartingLevel(int startingLevel) {
+        this.startingLevel = Math.max(1, Math.min(10, startingLevel));
+    }
+
+    public boolean isChallengeMode() {
+        return challengeMode;
+    }
+
+    public void setChallengeMode(boolean challengeMode) {
+        this.challengeMode = challengeMode;
     }
 
     @Override

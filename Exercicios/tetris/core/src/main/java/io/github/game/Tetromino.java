@@ -43,10 +43,41 @@ public class Tetromino {
     }
 
     public boolean rotate(Board board) {
+        if (type == TetrominoType.O) {
+            return true; // Peca O eh simetrica, nao precisa rotacionar
+        }
+
         int[][] rotated = rotateMatrix(shape);
-        if (board.isValidPosition(rotated, x, y)) {
-            shape = rotated;
-            return true;
+
+        // Wall Kicks e Floor Kicks para nunca travar nas paredes ou chão
+        int[][] kicks = {
+            {0, 0},   // Posição original
+            {-1, 0},  // Empurrão para esquerda (se encostado na parede direita)
+            {1, 0},   // Empurrão para direita (se encostado na parede esquerda)
+            {-2, 0},  // Empurrão 2 células esquerda (peça I na parede)
+            {2, 0},   // Empurrão 2 células direita (peça I na parede)
+            {-3, 0},  // Empurrão 3 células esquerda (peça I no canto extremo)
+            {0, 1},   // Floor kick (empurrão para cima se encostado no fundo)
+            {0, -1},  // Teto (se rotacionar no topo da tela)
+            {0, 2},   // 2 células para cima
+            {0, -2},  // 2 células para baixo
+            {-1, 1},  // Diagonal esquerda-cima
+            {1, 1},   // Diagonal direita-cima
+            {-1, -1}, // Diagonal esquerda-baixo
+            {1, -1},  // Diagonal direita-baixo
+            {-2, 1},
+            {2, 1}
+        };
+
+        for (int[] kick : kicks) {
+            int testX = x + kick[0];
+            int testY = y + kick[1];
+            if (board.isValidPosition(rotated, testX, testY)) {
+                shape = rotated;
+                x = testX;
+                y = testY;
+                return true;
+            }
         }
         return false;
     }

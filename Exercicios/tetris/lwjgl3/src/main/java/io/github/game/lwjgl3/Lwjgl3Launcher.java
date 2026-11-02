@@ -17,7 +17,7 @@ public class Lwjgl3Launcher {
 
     private static Lwjgl3ApplicationConfiguration getDefaultConfiguration() {
         Lwjgl3ApplicationConfiguration configuration = new Lwjgl3ApplicationConfiguration();
-        configuration.setTitle("Tetris - Soviet Edition 1987 (X68000)");
+        configuration.setTitle("Tetris - Soviet Edition 1987");
         configuration.useVsync(true);
         configuration.setForegroundFPS(Lwjgl3ApplicationConfiguration.getDisplayMode().refreshRate + 1);
         configuration.setWindowedMode(Constants.SCREEN_WIDTH, Constants.SCREEN_HEIGHT);
