@@ -8,19 +8,28 @@ import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.utils.Align;
 
 import java.util.Random;
 
+/**
+ * Tela principal de jogo no estilo Sovietico do Tetris X68000 (1987-1988).
+ * Toca '01 - Hawker\'s song.mp3' e conta com moldura arcade, HUD CRT e ghost piece.
+ */
 public class GameScreen extends ScreenAdapter {
 
-    // ---------- Recursos gráficos ----------
+    private final TetrisGame game;
+
+    // Recursos graficos
     private SpriteBatch batch;
     private BitmapFont font;
     private Texture blockTexture;
-    private Texture backgroundTexture;
-    private Texture gameOverOverlay;
+    private Texture fieldTexture;
+    private Texture gameBg;
+    private Texture gameOverBox;
+    private Texture pauseBox;
 
-    // ---------- Estado do jogo ----------
+    // Estado do jogo
     private Board board;
     private Tetromino currentPiece;
     private Tetromino nextPiece;
@@ -30,20 +39,19 @@ public class GameScreen extends ScreenAdapter {
     private int score;
     private int lines;
     private int level = 1;
+    private int highScore = 0;
     private boolean gameOver;
+    private boolean isPaused;
 
     private final Random random = new Random();
 
-    // ---------- Posicionamento na tela ----------
-    private final int boardOffsetX = 50;
-    private final int boardOffsetY = 30;
+    // Posicionamento do tabuleiro
+    private final int boardOffsetX = Constants.BOARD_OFFSET_X;
+    private final int boardOffsetY = Constants.BOARD_OFFSET_Y;
 
-    // ---------- DAS / ARR (Delayed Auto Shift) ----------
-    // Tempo que a seta precisa ficar pressionada antes de começar a repetir
+    // DAS / ARR (Delayed Auto Shift)
     private static final float MOVE_DAS_DELAY = 0.20f;
-    // Intervalo entre cada movimento repetido após o DAS
     private static final float MOVE_ARR_DELAY = 0.08f;
-    // Intervalo entre cada queda no soft-drop (seta para baixo segurada)
     private static final float SOFT_DROP_INTERVAL = 0.05f;
 
     private boolean leftHeld = false;
@@ -55,6 +63,14 @@ public class GameScreen extends ScreenAdapter {
     private boolean downHeld = false;
     private float downTimer = 0f;
 
+    public GameScreen(TetrisGame game) {
+        this.game = game;
+    }
+
+    public GameScreen() {
+        this(null);
+    }
+
     // =====================================================================
     // CICLO DE VIDA
     // =====================================================================
@@ -62,23 +78,49 @@ public class GameScreen extends ScreenAdapter {
     @Override
     public void show() {
         batch = new SpriteBatch();
-        font = new BitmapFont();
+
+        try {
+            font = new BitmapFont(Gdx.files.internal("retro_font.fnt"));
+        } catch (Exception e) {
+            font = new BitmapFont();
+        }
+        font.getData().setScale(1.0f);
+
         blockTexture = new Texture("blocoTetris.png");
         blockTexture.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
-        backgroundTexture = new Texture("campoTetris.png");
-//        gameOverOverlay = new Texture("game_over_overlay.png");
 
+        fieldTexture = new Texture("campoTetris.png");
+        fieldTexture.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+
+        gameBg = new Texture("game_bg.png");
+        gameBg.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+
+        gameOverBox = new Texture("game_over_box.png");
+        pauseBox = new Texture("pause_box.png");
+
+        if (game != null && game.getPreferences() != null) {
+            highScore = game.getPreferences().getInteger("highScore", 0);
+        }
+
+        initGame();
+
+        if (game != null && game.getAudioManager() != null) {
+            game.getAudioManager().playGameMusic();
+        }
+    }
+
+    private void initGame() {
         board = new Board();
         nextPiece = new Tetromino(getRandomType());
         spawnNewPiece();
         gameOver = false;
+        isPaused = false;
         score = 0;
         lines = 0;
         level = 1;
         dropInterval = Constants.BASE_DROP_INTERVAL;
         dropTimer = 0;
 
-        // reset de estado do DAS/ARR (importante para o restart via R)
         leftHeld = false;  leftTimer = 0;
         rightHeld = false; rightTimer = 0;
         downHeld = false;  downTimer = 0;
@@ -89,12 +131,14 @@ public class GameScreen extends ScreenAdapter {
         if (batch != null) batch.dispose();
         if (font != null) font.dispose();
         if (blockTexture != null) blockTexture.dispose();
-        if (backgroundTexture != null) backgroundTexture.dispose();
-        if (gameOverOverlay != null) gameOverOverlay.dispose();
+        if (fieldTexture != null) fieldTexture.dispose();
+        if (gameBg != null) gameBg.dispose();
+        if (gameOverBox != null) gameOverBox.dispose();
+        if (pauseBox != null) pauseBox.dispose();
     }
 
     // =====================================================================
-    // SPAWN DE PEÇAS
+    // SPAWN DE PECAS
     // =====================================================================
 
     private void spawnNewPiece() {
@@ -103,7 +147,21 @@ public class GameScreen extends ScreenAdapter {
 
         if (!board.isValidPosition(currentPiece.getShape(),
             currentPiece.getX(), currentPiece.getY())) {
-            gameOver = true;
+            triggerGameOver();
+        }
+    }
+
+    private void triggerGameOver() {
+        gameOver = true;
+        if (score > highScore) {
+            highScore = score;
+            if (game != null && game.getPreferences() != null) {
+                game.getPreferences().putInteger("highScore", highScore);
+                game.getPreferences().flush();
+            }
+        }
+        if (game != null && game.getAudioManager() != null) {
+            game.getAudioManager().stopAll();
         }
     }
 
@@ -120,20 +178,25 @@ public class GameScreen extends ScreenAdapter {
     public void render(float delta) {
         handleInput(delta);
 
-        if (!gameOver) {
+        if (!gameOver && !isPaused) {
             update(delta);
         }
 
-        Gdx.gl.glClearColor(0.1f, 0.1f, 0.15f, 1f);
+        Gdx.gl.glClearColor(0.05f, 0.06f, 0.10f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
         batch.begin();
 
-        // Fundo do tabuleiro
+        // 1. Moldura Arcade Sovietica completa (Console X68000)
         batch.setColor(Color.WHITE);
-        batch.draw(backgroundTexture, boardOffsetX, boardOffsetY);
+        batch.draw(gameBg, 0, 0, Constants.SCREEN_WIDTH, Constants.SCREEN_HEIGHT);
 
-        // Blocos fixos no tabuleiro
+        // 2. Fundo da Matriz de jogo com marca d'agua sovietica
+        batch.draw(fieldTexture, boardOffsetX, boardOffsetY,
+            Constants.BOARD_COLS * Constants.BLOCK_SIZE,
+            Constants.BOARD_ROWS * Constants.BLOCK_SIZE);
+
+        // 3. Blocos fixos no tabuleiro (com relevo chanfrado 3D)
         for (int r = 0; r < board.getRows(); r++) {
             for (int c = 0; c < board.getCols(); c++) {
                 Color color = board.getCell(r, c);
@@ -146,8 +209,32 @@ public class GameScreen extends ScreenAdapter {
             }
         }
 
-        // Peça atual
-        if (!gameOver) {
+        // 4. Ghost Piece (projecao translucida no fundo)
+        if (!gameOver && !isPaused && currentPiece != null) {
+            int ghostY = currentPiece.getY();
+            while (board.isValidPosition(currentPiece.getShape(), currentPiece.getX(), ghostY - 1)) {
+                ghostY--;
+            }
+            if (ghostY != currentPiece.getY()) {
+                int[][] shape = currentPiece.getShape();
+                Color c = currentPiece.getColor();
+                batch.setColor(c.r, c.g, c.b, 0.32f);
+                for (int r = 0; r < shape.length; r++) {
+                    for (int col = 0; col < shape[0].length; col++) {
+                        if (shape[r][col] == 0) continue;
+                        int boardRow = ghostY + (shape.length - 1 - r);
+                        int boardCol = currentPiece.getX() + col;
+                        float gx = boardOffsetX + boardCol * Constants.BLOCK_SIZE;
+                        float gy = boardOffsetY + boardRow * Constants.BLOCK_SIZE;
+                        batch.draw(blockTexture, gx, gy,
+                            Constants.BLOCK_SIZE, Constants.BLOCK_SIZE);
+                    }
+                }
+            }
+        }
+
+        // 5. Peca ativa em queda
+        if (!gameOver && currentPiece != null) {
             int[][] shape = currentPiece.getShape();
             int posX = currentPiece.getX();
             int posY = currentPiece.getY();
@@ -165,41 +252,63 @@ public class GameScreen extends ScreenAdapter {
             }
         }
 
-        // HUD
-        batch.setColor(Color.WHITE);
-        int hudX = boardOffsetX + Constants.BOARD_COLS * Constants.BLOCK_SIZE + 30;
-        font.setColor(Color.WHITE);
-        font.draw(batch, "Pontos: " + score, hudX, Constants.SCREEN_HEIGHT - 30);
-        font.draw(batch, "Linhas: " + lines, hudX, Constants.SCREEN_HEIGHT - 60);
-        font.draw(batch, "Nivel: " + level, hudX, Constants.SCREEN_HEIGHT - 90);
-        font.draw(batch, "Proximo:", hudX, Constants.SCREEN_HEIGHT - 140);
+        // 6. HUD / Mostradores CRT no painel direito
+        Color hudColor = new Color(1.0f, 0.90f, 0.40f, 1f);
+        font.setColor(hudColor);
 
-        // Prévia da próxima peça
-        int[][] nextShape = nextPiece.getShape();
-        batch.setColor(nextPiece.getColor());
-        int previewX = hudX;
-        int previewY = Constants.SCREEN_HEIGHT - 180;
-        for (int r = 0; r < nextShape.length; r++) {
-            for (int c = 0; c < nextShape[0].length; c++) {
-                if (nextShape[r][c] == 0) continue;
-                float x = previewX + c * Constants.BLOCK_SIZE;
-                float y = previewY - r * Constants.BLOCK_SIZE;
-                batch.draw(blockTexture, x, y,
-                    Constants.BLOCK_SIZE, Constants.BLOCK_SIZE);
+        // SCORE: centro y = 544
+        font.draw(batch, String.valueOf(score), 356, 544, 123, Align.center, false);
+
+        // TOP RECORD: centro y = 479
+        font.draw(batch, String.valueOf(highScore), 356, 479, 123, Align.center, false);
+
+        // LEVEL: centro y = 414
+        font.draw(batch, String.valueOf(level), 356, 414, 123, Align.center, false);
+
+        // LINES: centro y = 349
+        font.draw(batch, String.valueOf(lines), 356, 349, 123, Align.center, false);
+
+        // 7. Previa da proxima peca (centralizada na caixa NEXT)
+        if (nextPiece != null) {
+            int[][] nextShape = nextPiece.getShape();
+            int sCols = nextShape[0].length;
+            int sRows = nextShape.length;
+            float pieceW = sCols * Constants.BLOCK_SIZE;
+            float pieceH = sRows * Constants.BLOCK_SIZE;
+            float prevStartX = 417.5f - pieceW / 2f;
+            float prevStartY = 238.5f - pieceH / 2f;
+
+            batch.setColor(nextPiece.getColor());
+            for (int r = 0; r < sRows; r++) {
+                for (int c = 0; c < sCols; c++) {
+                    if (nextShape[r][c] == 0) continue;
+                    float bx = prevStartX + c * Constants.BLOCK_SIZE;
+                    float by = prevStartY + (sRows - 1 - r) * Constants.BLOCK_SIZE;
+                    batch.draw(blockTexture, bx, by,
+                        Constants.BLOCK_SIZE, Constants.BLOCK_SIZE);
+                }
             }
         }
 
-        // Overlay de game over
-//        if (gameOver) {
-//            batch.setColor(Color.WHITE);
-//            batch.draw(gameOverOverlay, 0, 0);
-//            font.setColor(Color.RED);
-//            font.draw(batch, "FIM DO JOGO",
-//                boardOffsetX + 50, Constants.SCREEN_HEIGHT / 2 + 20);
-//            font.setColor(Color.WHITE);
-//            font.draw(batch, "Pressione R para iniciar",
-//                boardOffsetX + 30, Constants.SCREEN_HEIGHT / 2 - 20);
-//        }
+        // 8. Overlay de Pausa
+        if (isPaused && !gameOver) {
+            batch.setColor(Color.WHITE);
+            batch.draw(pauseBox, 120, 260);
+        }
+
+        // 9. Overlay de Fim de Jogo
+        if (gameOver) {
+            batch.setColor(Color.WHITE);
+            batch.draw(gameOverBox, 80, 215);
+
+            font.setColor(Color.WHITE);
+            font.draw(batch, "PONTOS: " + score, 80, 320, 340, Align.center, false);
+
+            if (score >= highScore && score > 0) {
+                font.setColor(new Color(0.98f, 0.85f, 0.20f, 1f));
+                font.draw(batch, "★ NOVO RECORDE SOVIETICO! ★", 80, 292, 340, Align.center, false);
+            }
+        }
 
         batch.end();
     }
@@ -209,49 +318,81 @@ public class GameScreen extends ScreenAdapter {
     // =====================================================================
 
     private void handleInput(float delta) {
-        if (gameOver) {
-            if (Gdx.input.isKeyJustPressed(Input.Keys.R)) {
-                dispose();
-                show();
+        // Pausa / Retorno ao Menu
+        if (Gdx.input.isKeyJustPressed(Input.Keys.P) && !gameOver) {
+            isPaused = !isPaused;
+            if (game != null && game.getAudioManager() != null) {
+                if (isPaused) {
+                    game.getAudioManager().pauseGameMusic();
+                } else {
+                    game.getAudioManager().resumeGameMusic();
+                }
             }
             return;
         }
 
-        // Rotação (instantânea — a cada toque)
+        // Mudo / desmudo
+        if (Gdx.input.isKeyJustPressed(Input.Keys.M)) {
+            if (game != null && game.getAudioManager() != null) {
+                game.getAudioManager().toggleMute();
+            }
+        }
+
+        // ESC: Volta ao Menu
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            if (game != null) {
+                game.showMenu();
+            }
+            return;
+        }
+
+        // Se pausado, congela acoes de peca
+        if (isPaused) return;
+
+        // Se Fim de Jogo, tecla R recomeca
+        if (gameOver) {
+            if (Gdx.input.isKeyJustPressed(Input.Keys.R)) {
+                initGame();
+                if (game != null && game.getAudioManager() != null) {
+                    game.getAudioManager().playGameMusic();
+                }
+            }
+            return;
+        }
+
+        // Rotacao
         if (Gdx.input.isKeyJustPressed(Input.Keys.UP)) {
             currentPiece.rotate(board);
         }
 
-        // Hard drop (queda instantânea — a cada toque)
+        // Hard drop (queda instantanea)
         if (Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
             while (currentPiece.moveDown(board)) { /* desce ao fundo */ }
             lockPiece();
+            return;
         }
 
         // Movimento horizontal com DAS/ARR
         handleHorizontal(delta);
 
-        // Soft drop com repetição controlada
+        // Soft drop com repeticao controlada
         handleSoftDrop(delta);
     }
 
-    /** Trata ← e → com DAS (delay inicial) e ARR (repetição contínua). */
+    /** Trata ← e → com DAS (delay inicial) e ARR (repeticao continua). */
     private void handleHorizontal(float delta) {
         boolean leftPressed  = Gdx.input.isKeyPressed(Input.Keys.LEFT);
         boolean rightPressed = Gdx.input.isKeyPressed(Input.Keys.RIGHT);
 
-        // Se ambas as setas estão pressionadas ao mesmo tempo, ignora as duas
-        // (evita "vibração" da peça).
         if (leftPressed && rightPressed) {
             leftHeld = false;  leftTimer = 0;
             rightHeld = false; rightTimer = 0;
             return;
         }
 
-        // ---------- ESQUERDA ----------
+        // ESQUERDA
         if (leftPressed) {
             if (!leftHeld) {
-                // Primeiro frame: move 1 célula imediatamente
                 currentPiece.moveLeft(board);
                 leftHeld = true;
                 leftTimer = 0f;
@@ -260,7 +401,6 @@ public class GameScreen extends ScreenAdapter {
                 if (leftTimer >= MOVE_DAS_DELAY
                     && leftTimer - MOVE_DAS_DELAY >= MOVE_ARR_DELAY) {
                     currentPiece.moveLeft(board);
-                    // Reancora o timer para o próximo repeat vir após ARR
                     leftTimer = MOVE_DAS_DELAY;
                 }
             }
@@ -269,7 +409,7 @@ public class GameScreen extends ScreenAdapter {
             leftTimer = 0f;
         }
 
-        // ---------- DIREITA ----------
+        // DIREITA
         if (rightPressed) {
             if (!rightHeld) {
                 currentPiece.moveRight(board);
@@ -289,11 +429,10 @@ public class GameScreen extends ScreenAdapter {
         }
     }
 
-    /** Soft drop (seta ↓) com repetição controlada em SOFT_DROP_INTERVAL. */
+    /** Soft drop (seta ↓) com repeticao controlada em SOFT_DROP_INTERVAL. */
     private void handleSoftDrop(float delta) {
         if (Gdx.input.isKeyPressed(Input.Keys.DOWN)) {
             if (!downHeld) {
-                // Primeiro frame: desce 1 célula
                 downHeld = true;
                 downTimer = 0f;
                 if (currentPiece.moveDown(board)) dropTimer = 0f;
@@ -311,7 +450,7 @@ public class GameScreen extends ScreenAdapter {
     }
 
     // =====================================================================
-    // UPDATE (gravidade automática)
+    // UPDATE (gravidade automatica)
     // =====================================================================
 
     private void update(float delta) {
@@ -332,17 +471,20 @@ public class GameScreen extends ScreenAdapter {
             lines += cleared;
             switch (cleared) {
                 case 1:
-                    score += 100;
+                    score += 100 * level;
                     break;
                 case 2:
-                    score += 300;
+                    score += 300 * level;
                     break;
                 case 3:
-                    score += 500;
+                    score += 500 * level;
                     break;
                 case 4:
-                    score += 800;
+                    score += 800 * level; // Tetris!
                     break;
+            }
+            if (score > highScore) {
+                highScore = score;
             }
             level = 1 + lines / 10;
             dropInterval = Constants.BASE_DROP_INTERVAL *

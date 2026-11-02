@@ -1,8 +1,8 @@
 package io.github.game.lwjgl3;
 
-
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Application;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3ApplicationConfiguration;
+import io.github.game.Constants;
 import io.github.game.TetrisGame;
 
 public class Lwjgl3Launcher {
@@ -12,18 +12,16 @@ public class Lwjgl3Launcher {
     }
 
     private static Lwjgl3Application createApplication() {
-        return new Lwjgl3Application(new io.github.game.TetrisGame(), getDefaultConfiguration());
+        return new Lwjgl3Application(new TetrisGame(), getDefaultConfiguration());
     }
 
     private static Lwjgl3ApplicationConfiguration getDefaultConfiguration() {
         Lwjgl3ApplicationConfiguration configuration = new Lwjgl3ApplicationConfiguration();
-        configuration.setTitle("Tetris");
+        configuration.setTitle("Tetris - Soviet Edition 1987 (X68000)");
         configuration.useVsync(true);
         configuration.setForegroundFPS(Lwjgl3ApplicationConfiguration.getDisplayMode().refreshRate + 1);
-        // ALTERE AQUI para o tamanho do Tetris
-        configuration.setWindowedMode(500, 630);
+        configuration.setWindowedMode(Constants.SCREEN_WIDTH, Constants.SCREEN_HEIGHT);
         configuration.setResizable(false);
-        // Mantenha os ícones OU remova se apagar os PNGs da pasta assets
         configuration.setWindowIcon("libgdx128.png", "libgdx64.png", "libgdx32.png", "libgdx16.png");
         return configuration;
     }
