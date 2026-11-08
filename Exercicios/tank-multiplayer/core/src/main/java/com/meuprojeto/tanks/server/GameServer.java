@@ -1,0 +1,295 @@
+package com.meuprojeto.tanks.server;
+
+import com.meuprojeto.tanks.Bullet;
+import com.meuprojeto.tanks.GameState;
+import com.meuprojeto.tanks.PlayerInput;
+import com.meuprojeto.tanks.Tank;
+
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.Iterator;
+
+/**
+ * Servidor autoritativo da Batalha de Tanques.
+ *
+ * Mesma ideia da base do Pong, generalizada para N jogadores:
+ *   - Thread principal: fica no accept() esperando jogadores (até MAX_PLAYERS),
+ *     a qualquer momento da partida (entra e sai livremente).
+ *   - Uma thread por jogador (ClientHandler): lê o input desse jogador.
+ *   - Thread GameLoop: a 60 Hz aplica os inputs, move tanques e projéteis,
+ *     resolve colisões/dano e envia o snapshot para TODOS os clientes.
+ *
+ * Toda leitura/escrita do estado é feita dentro de synchronized(state), porque
+ * três tipos de thread mexem nele (accept, handlers ao desconectar e game loop).
+ */
+public class GameServer {
+
+    public static final int PORT = 12345;
+    private static final float DT = 1f / 60f;
+
+    private static final GameState state = new GameState();
+    private static final ClientHandler[] clients = new ClientHandler[GameState.MAX_PLAYERS];
+
+    public static void main(String[] args) throws IOException {
+        ServerSocket serverSocket = new ServerSocket(PORT);
+        System.out.println("[Servidor] Batalha de Tanques na porta " + PORT
+            + " (max. " + GameState.MAX_PLAYERS + " jogadores)");
+
+        Thread gameLoop = new Thread(GameServer::loop, "GameLoop");
+        gameLoop.setDaemon(true);
+        gameLoop.start();
+
+        // Aceita jogadores para sempre: quem chegar ocupa o primeiro slot livre.
+        while (true) {
+            Socket socket = serverSocket.accept();
+            socket.setTcpNoDelay(true); // pacotes pequenos e frequentes: sem atraso de Nagle
+
+            int slot = -1;
+            synchronized (state) {
+                for (int i = 0; i < clients.length; i++) {
+                    if (clients[i] == null) { slot = i; break; }
+                }
+                if (slot >= 0) {
+                    try {
+                        clients[slot] = new ClientHandler(socket, slot);
+                        addPlayer(slot);
+                    } catch (IOException e) {
+                        // conexão caiu durante o handshake: ignora este cliente
+                        try { socket.close(); } catch (IOException ignored) {}
+                        continue;
+                    }
+                }
+            }
+
+            if (slot < 0) {
+                System.out.println("[Servidor] Recusado (servidor cheio): " + socket.getInetAddress());
+                ClientHandler.rejectFull(socket);
+                continue;
+            }
+
+            System.out.println("[Servidor] Jogador " + (slot + 1) + " conectado: " + socket.getInetAddress());
+            clients[slot].start();
+        }
+    }
+
+    /** Chamado pelo ClientHandler quando a conexão cai. */
+    static void removePlayer(int id) {
+        String name;
+        synchronized (state) {
+            name = state.tanks[id].name;
+            state.tanks[id].active = false;
+            clients[id] = null;
+        }
+        System.out.println("[Servidor] " + name + " (Jogador " + (id + 1) + ") desconectado.");
+    }
+
+    static void setPlayerName(int id, String name) {
+        synchronized (state) {
+            state.tanks[id].name = name;
+        }
+        System.out.println("[Servidor] Jogador " + (id + 1) + " definiu nome: " + name);
+    }
+
+    private static void addPlayer(int id) {
+        Tank t = state.tanks[id];
+        t.active = true;
+        t.name = "Jogador " + (id + 1);
+        t.kills = 0;
+        t.deaths = 0;
+        spawn(t);
+    }
+
+    // ---- LOOP ------------------------------------------------------------------
+
+    private static void loop() {
+        long lastTime = System.nanoTime();
+        double nsPerTick = 1_000_000_000.0 / 60.0;
+        double delta = 0;
+
+        while (true) {
+            long now = System.nanoTime();
+            delta += (now - lastTime) / nsPerTick;
+            lastTime = now;
+
+            boolean ticked = false;
+            byte[] snapshot = null;
+            ClientHandler[] targets;
+
+            synchronized (state) {
+                while (delta >= 1.0) {
+                    updateGame(DT);
+                    delta -= 1.0;
+                    ticked = true;
+                }
+                if (ticked) snapshot = serialize();
+                targets = clients.clone();
+            }
+
+            // Envia FORA do lock: um cliente lento não trava o jogo dos outros.
+            if (snapshot != null) {
+                for (ClientHandler c : targets) {
+                    if (c != null) c.send(snapshot);
+                }
+            }
+
+            try { Thread.sleep(1); } catch (InterruptedException e) { return; }
+        }
+    }
+
+    /** Serializa o estado UMA vez por tick; os mesmos bytes vão para todos. */
+    private static byte[] serialize() {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(1024);
+            state.write(new DataOutputStream(bytes));
+            return bytes.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException(e); // não acontece com ByteArrayOutputStream
+        }
+    }
+
+    // ---- REGRAS DO JOGO --------------------------------------------------------
+
+    private static void updateGame(float dt) {
+        for (Tank t : state.tanks) {
+            if (!t.active) continue;
+
+            if (!t.alive) {
+                t.respawnTimer -= dt;
+                if (t.respawnTimer <= 0f) spawn(t);
+                continue;
+            }
+
+            PlayerInput in = clients[t.id] != null ? clients[t.id].input : null;
+            if (in == null) continue;
+
+            t.shield = Math.max(0f, t.shield - dt);
+            t.reload = Math.max(0f, t.reload - dt);
+            t.turretAngle = in.aimAngle;
+
+            // Movimento só nas 4 direções cardinais
+            if (in.direction >= GameState.DIR_UP && in.direction <= GameState.DIR_LEFT) {
+                t.facing = in.direction;
+                float step = GameState.TANK_SPEED * dt;
+                tryMove(t, GameState.DIR_X[in.direction] * step, GameState.DIR_Y[in.direction] * step);
+            }
+
+            // Tiro (respeitando o tempo de recarga)
+            if (in.fire && t.reload <= 0f) {
+                fire(t);
+            }
+        }
+
+        updateBullets(dt);
+    }
+
+    private static void tryMove(Tank t, float dx, float dy) {
+        float nx = clamp(t.x + dx, GameState.TANK_HALF, GameState.WORLD_WIDTH - GameState.TANK_HALF);
+        float ny = clamp(t.y + dy, GameState.TANK_HALF, GameState.WORLD_HEIGHT - GameState.TANK_HALF);
+
+        // Tanques não atravessam uns aos outros (colisão AABB)
+        for (Tank o : state.tanks) {
+            if (o == t || !o.active || !o.alive) continue;
+            if (Math.abs(nx - o.x) < GameState.TANK_SIZE && Math.abs(ny - o.y) < GameState.TANK_SIZE) {
+                return; // bloqueado
+            }
+        }
+        t.x = nx;
+        t.y = ny;
+    }
+
+    private static void fire(Tank t) {
+        Bullet b = new Bullet();
+        b.owner = t.id;
+        b.x = t.barrelTipX();
+        b.y = t.barrelTipY();
+        b.vx = (float) Math.cos(t.turretAngle) * GameState.BULLET_SPEED;
+        b.vy = (float) Math.sin(t.turretAngle) * GameState.BULLET_SPEED;
+        state.bullets.add(b);
+
+        t.reload = GameState.RELOAD_TIME;
+        t.shield = 0f; // atirar cancela a proteção de nascimento
+    }
+
+    private static void updateBullets(float dt) {
+        Iterator<Bullet> it = state.bullets.iterator();
+        while (it.hasNext()) {
+            Bullet b = it.next();
+            b.x += b.vx * dt;
+            b.y += b.vy * dt;
+            b.traveled += GameState.BULLET_SPEED * dt;
+
+            // Alcance máximo atingido ou saiu do campo
+            if (b.traveled >= GameState.BULLET_RANGE
+                || b.x < 0 || b.y < 0 || b.x > GameState.WORLD_WIDTH || b.y > GameState.WORLD_HEIGHT) {
+                it.remove();
+                continue;
+            }
+
+            Tank hit = findHit(b);
+            if (hit != null) {
+                it.remove();
+                if (hit.shield <= 0f) damage(hit, b.owner);
+            }
+        }
+    }
+
+    private static Tank findHit(Bullet b) {
+        float reach = GameState.TANK_HALF + GameState.BULLET_RADIUS;
+        for (Tank t : state.tanks) {
+            if (!t.active || !t.alive || t.id == b.owner) continue;
+            if (Math.abs(b.x - t.x) <= reach && Math.abs(b.y - t.y) <= reach) return t;
+        }
+        return null;
+    }
+
+    private static void damage(Tank victim, int shooterId) {
+        victim.hp--;
+        if (victim.hp > 0) return;
+
+        victim.alive = false;
+        victim.deaths++;
+        victim.respawnTimer = GameState.RESPAWN_TIME;
+
+        Tank shooter = state.tanks[shooterId];
+        if (shooter.active) shooter.kills++;
+
+        System.out.println("[Servidor] " + (shooter.active ? shooter.name : ("Jogador " + (shooterId + 1)))
+            + " destruiu " + victim.name);
+    }
+
+    /** Renasce no ponto de spawn mais longe dos tanques vivos. */
+    private static void spawn(Tank t) {
+        float[] best = GameState.SPAWN_POINTS[0];
+        float bestDist = -1f;
+        for (float[] p : GameState.SPAWN_POINTS) {
+            float nearest = Float.MAX_VALUE;
+            for (Tank o : state.tanks) {
+                if (o == t || !o.active || !o.alive) continue;
+                float dx = o.x - p[0], dy = o.y - p[1];
+                nearest = Math.min(nearest, dx * dx + dy * dy);
+            }
+            if (nearest > bestDist) {
+                bestDist = nearest;
+                best = p;
+            }
+        }
+
+        t.x = best[0];
+        t.y = best[1];
+        t.alive = true;
+        t.hp = GameState.TANK_MAX_HP;
+        t.reload = 0f;
+        t.shield = GameState.SPAWN_SHIELD;
+        t.respawnTimer = 0f;
+        // Vira para o centro do campo
+        t.facing = t.y < GameState.WORLD_HEIGHT / 2f ? GameState.DIR_UP : GameState.DIR_DOWN;
+        t.turretAngle = (float) Math.atan2(GameState.WORLD_HEIGHT / 2f - t.y, GameState.WORLD_WIDTH / 2f - t.x);
+    }
+
+    private static float clamp(float v, float min, float max) {
+        return v < min ? min : (v > max ? max : v);
+    }
+}

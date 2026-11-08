@@ -1,0 +1,23 @@
+[compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
+eclipse.project.name = appName + '-core'
+
+dependencies {
+  api "com.badlogicgames.gdx:gdx:$gdxVersion"
+
+  if(enableGraalNative == 'true') {
+    implementation "io.github.berstanio:gdx-svmhelper-annotations:$graalHelperVersion"
+  }
+}
+
+jar {
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Sobe o servidor dedicado:  ./gradlew :core:runServer
+tasks.register('runServer', JavaExec) {
+  group = 'application'
+  description = 'Inicia o servidor da Batalha de Tanques (porta 12345).'
+  mainClass = 'com.meuprojeto.tanks.server.GameServer'
+  classpath = sourceSets.main.runtimeClasspath
+  standardInput = System.in
+}
