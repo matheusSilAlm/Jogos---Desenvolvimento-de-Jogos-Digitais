@@ -75,8 +75,37 @@ public class GameScreen extends ScreenAdapter {
     private final boolean[] prevAlive = new boolean[GameState.MAX_PLAYERS];
     private final int[] prevHp = new int[GameState.MAX_PLAYERS];
     private final float[] hitFlash = new float[GameState.MAX_PLAYERS];
-    private final List<float[]> explosions = new ArrayList<float[]>(); // {x, y, tempo}
+    private final int[] prevArmor = new int[GameState.MAX_PLAYERS];
+    private final float[] prevBoost = new float[GameState.MAX_PLAYERS];
+    private final List<float[]> explosions = new ArrayList<float[]>(); // {x, y, tempo, tipo}
     private static final float EXPLOSION_TIME = 0.6f;
+    private static final float KIND_EXPLOSION = 0f, KIND_SHIELD_BREAK = 1f;
+    private final List<FloatingText> floatingTexts = new ArrayList<FloatingText>();
+    private static final float FLOATING_TEXT_TIME = 1.2f;
+
+    // ---- cores dos power-ups (índice = PowerUp.REPAIR, ARMOR, DAMAGE) ----
+    private static final Color[] POWERUP_COLORS = {
+        new Color(0.30f, 0.85f, 0.40f, 1f), // reparo: verde
+        new Color(0.30f, 0.60f, 1.00f, 1f), // escudo: azul
+        new Color(1.00f, 0.35f, 0.15f, 1f), // dano: vermelho-alaranjado
+    };
+    private static final Color ARMOR_COLOR = POWERUP_COLORS[PowerUp.ARMOR];
+    private static final Color BOOST_COLOR = POWERUP_COLORS[PowerUp.DAMAGE];
+
+    /** Texto que sobe e some sobre o tanque ao pegar um power-up ("+2 VIDA"...). */
+    private static class FloatingText {
+        final String text;
+        final Color color;
+        final float x, y;
+        float age;
+
+        FloatingText(String text, Color color, float x, float y) {
+            this.text = text;
+            this.color = color;
+            this.x = x;
+            this.y = y;
+        }
+    }
     private float time;
 
     public GameScreen(TankClient game, String host, String playerName) {
@@ -188,6 +217,7 @@ public class GameScreen extends ScreenAdapter {
 
         shape.begin(ShapeRenderer.ShapeType.Filled);
         drawField();
+        drawPowerUps(s);
         for (Tank t : s.tanks) if (t.active && !t.alive) drawWreck(t);
         if (me.alive) drawTrajectory(me);
         for (Tank t : s.tanks) if (t.active && t.alive) drawTank(t, t.id == playerId);
@@ -234,11 +264,20 @@ public class GameScreen extends ScreenAdapter {
             for (Tank t : s.tanks) {
                 int i = t.id;
                 if (t.active) {
-                    if (prevAlive[i] && !t.alive) explosions.add(new float[] { t.x, t.y, 0f });
-                    if (prevAlive[i] && t.alive && t.hp < prevHp[i]) hitFlash[i] = 0.15f;
+                    if (prevAlive[i] && !t.alive) explosions.add(new float[] { t.x, t.y, 0f, KIND_EXPLOSION });
+                    if (prevAlive[i] && t.alive) {
+                        if (t.hp < prevHp[i]) hitFlash[i] = 0.15f;
+                        // power-ups coletados / escudo quebrado
+                        if (t.hp > prevHp[i]) addFloatingText("+" + (t.hp - prevHp[i]) + " VIDA", POWERUP_COLORS[PowerUp.REPAIR], t);
+                        if (t.armor > prevArmor[i]) addFloatingText("+ESCUDO", ARMOR_COLOR, t);
+                        if (t.armor < prevArmor[i]) explosions.add(new float[] { t.x, t.y, 0f, KIND_SHIELD_BREAK });
+                        if (t.damageBoost > prevBoost[i] + 0.5f) addFloatingText("DANO x2!", BOOST_COLOR, t);
+                    }
                 }
                 prevAlive[i] = t.active && t.alive;
                 prevHp[i] = t.hp;
+                prevArmor[i] = t.armor;
+                prevBoost[i] = t.damageBoost;
             }
             lastProcessed = s;
         }
@@ -250,6 +289,16 @@ public class GameScreen extends ScreenAdapter {
             e[2] += delta;
             if (e[2] >= EXPLOSION_TIME) it.remove();
         }
+        Iterator<FloatingText> ft = floatingTexts.iterator();
+        while (ft.hasNext()) {
+            FloatingText f = ft.next();
+            f.age += delta;
+            if (f.age >= FLOATING_TEXT_TIME) ft.remove();
+        }
+    }
+
+    private void addFloatingText(String text, Color color, Tank t) {
+        floatingTexts.add(new FloatingText(text, color, t.x, t.y + GameState.TANK_HALF + 30f));
     }
 
     // =========================================================================
@@ -271,6 +320,56 @@ public class GameScreen extends ScreenAdapter {
         shape.rect(0, GameState.WORLD_HEIGHT - b, GameState.WORLD_WIDTH, b);
         shape.rect(0, 0, b, GameState.WORLD_HEIGHT);
         shape.rect(GameState.WORLD_WIDTH - b, 0, b, GameState.WORLD_HEIGHT);
+    }
+
+    /** Itens no chão: círculo colorido com ícone. Piscam nos últimos 3 s antes de sumir. */
+    private void drawPowerUps(GameState s) {
+        float r = GameState.POWERUP_RADIUS;
+        for (PowerUp p : s.powerUps) {
+            if (p.ttl < 3f && (int) (time * 8f) % 2 == 0) continue;
+            Color c = POWERUP_COLORS[p.type];
+            float cx = p.x;
+            float cy = p.y + (float) Math.sin(time * 3f + p.x) * 2f;   // flutua de leve
+            float pulse = 0.5f + 0.5f * (float) Math.sin(time * 4f + p.y);
+
+            shape.setColor(c.r, c.g, c.b, 0.18f + 0.15f * pulse);
+            shape.circle(cx, cy, r + 5f + 3f * pulse, 24);
+            shape.setColor(0f, 0f, 0f, 0.35f);
+            shape.circle(p.x + 2f, p.y - 3f, r, 20);              // sombra
+            shape.setColor(0.08f, 0.08f, 0.08f, 1f);
+            shape.circle(cx, cy, r + 1.5f, 24);
+            shape.setColor(c);
+            shape.circle(cx, cy, r, 24);
+
+            switch (p.type) {
+                case PowerUp.REPAIR: drawWrenchIcon(cx, cy, c); break;
+                case PowerUp.ARMOR:  drawShieldIcon(cx, cy, c); break;
+                case PowerUp.DAMAGE: drawBoltIcon(cx, cy);      break;
+                default: break;
+            }
+        }
+    }
+
+    private void drawWrenchIcon(float cx, float cy, Color bg) {
+        shape.setColor(Color.WHITE);
+        shape.rectLine(cx - 6f, cy - 6f, cx + 3f, cy + 3f, 3.5f);   // cabo
+        shape.circle(cx + 4.5f, cy + 4.5f, 4.5f, 16);               // cabeça
+        shape.setColor(bg);
+        shape.rectLine(cx + 5f, cy + 5f, cx + 10f, cy + 10f, 3f);   // boca da chave
+    }
+
+    private void drawShieldIcon(float cx, float cy, Color bg) {
+        shape.setColor(Color.WHITE);
+        shape.rect(cx - 6f, cy - 1f, 12f, 8f);
+        shape.triangle(cx - 6f, cy - 1f, cx + 6f, cy - 1f, cx, cy - 9f);
+        shape.setColor(bg);
+        shape.rect(cx - 1f, cy - 5f, 2f, 10f);                      // faixa central
+    }
+
+    private void drawBoltIcon(float cx, float cy) {
+        shape.setColor(1f, 0.95f, 0.4f, 1f);
+        shape.triangle(cx + 3f, cy + 9f, cx - 5f, cy - 1f, cx + 1.5f, cy - 1f);
+        shape.triangle(cx - 1.5f, cy + 1f, cx + 5f, cy + 1f, cx - 3f, cy - 9f);
     }
 
     private void drawTank(Tank t, boolean isMe) {
@@ -355,7 +454,7 @@ public class GameScreen extends ScreenAdapter {
         length = Math.max(0f, length);
 
         boolean ready = me.reload <= 0f;
-        Color c = TankColors.BODY[me.id];
+        Color c = me.damageBoost > 0f ? BOOST_COLOR : TankColors.BODY[me.id];
         if (ready) shape.setColor(c.r, c.g, c.b, 0.75f);
         else       shape.setColor(1f, 1f, 1f, 0.22f);
 
@@ -372,10 +471,16 @@ public class GameScreen extends ScreenAdapter {
 
     private void drawBullets(GameState s) {
         for (Bullet b : s.bullets) {
+            boolean boosted = b.damage > 1;
+            float r = boosted ? GameState.BULLET_RADIUS * 1.6f : GameState.BULLET_RADIUS;
+            if (boosted) {
+                shape.setColor(BOOST_COLOR.r, BOOST_COLOR.g, BOOST_COLOR.b, 0.35f);
+                shape.circle(b.x, b.y, r + 6f, 16);
+            }
             shape.setColor(0.05f, 0.05f, 0.05f, 1f);
-            shape.circle(b.x, b.y, GameState.BULLET_RADIUS + 1.5f, 12);
-            shape.setColor(TankColors.BODY[b.owner]);
-            shape.circle(b.x, b.y, GameState.BULLET_RADIUS, 12);
+            shape.circle(b.x, b.y, r + 1.5f, 12);
+            shape.setColor(boosted ? BOOST_COLOR : TankColors.BODY[b.owner]);
+            shape.circle(b.x, b.y, r, 12);
         }
     }
 
@@ -383,6 +488,11 @@ public class GameScreen extends ScreenAdapter {
         for (float[] e : explosions) {
             float p = e[2] / EXPLOSION_TIME;   // 0..1
             float a = 1f - p;
+            if (e[3] == KIND_SHIELD_BREAK) {
+                shape.setColor(ARMOR_COLOR.r, ARMOR_COLOR.g, ARMOR_COLOR.b, a * 0.5f);
+                shape.circle(e[0], e[1], GameState.TANK_HALF + 30f * p, 28);
+                continue;
+            }
             shape.setColor(1f, 0.45f, 0.1f, a * 0.8f);
             shape.circle(e[0], e[1], 12f + 50f * p, 28);
             shape.setColor(1f, 0.9f, 0.3f, a);
@@ -392,12 +502,14 @@ public class GameScreen extends ScreenAdapter {
 
     private void drawHpPips(Tank t) {
         float w = 9f, gap = 3f;
-        float total = GameState.TANK_MAX_HP * w + (GameState.TANK_MAX_HP - 1) * gap;
+        int pips = GameState.TANK_MAX_HP + t.armor;  // o escudo é um quadradinho azul a mais
+        float total = pips * w + (pips - 1) * gap;
         float x0 = t.x - total / 2f;
         float y0 = t.y + GameState.TANK_HALF + 6f;
-        for (int i = 0; i < GameState.TANK_MAX_HP; i++) {
-            if (i < t.hp) shape.setColor(0.35f, 0.95f, 0.35f, 1f);
-            else          shape.setColor(0.3f, 0.1f, 0.1f, 1f);
+        for (int i = 0; i < pips; i++) {
+            if (i >= GameState.TANK_MAX_HP) shape.setColor(ARMOR_COLOR);
+            else if (i < t.hp)              shape.setColor(0.35f, 0.95f, 0.35f, 1f);
+            else                            shape.setColor(0.3f, 0.1f, 0.1f, 1f);
             shape.rect(x0 + i * (w + gap), y0, w, 4f);
         }
     }
@@ -424,6 +536,19 @@ public class GameScreen extends ScreenAdapter {
             shape.circle(t.x, t.y, GameState.TANK_HALF + 8f, 32);
             shape.circle(t.x, t.y, GameState.TANK_HALF + 9f, 32);
         }
+        for (Tank t : s.tanks) {
+            if (!t.active || !t.alive) continue;
+            if (t.armor > 0) {
+                shape.setColor(ARMOR_COLOR.r, ARMOR_COLOR.g, ARMOR_COLOR.b, 0.8f);
+                shape.rect(t.x - GameState.TANK_HALF - 4f, t.y - GameState.TANK_HALF - 4f,
+                    GameState.TANK_SIZE + 8f, GameState.TANK_SIZE + 8f);
+            }
+            if (t.damageBoost > 0f) {
+                float fast = 0.5f + 0.5f * (float) Math.sin(time * 18f);
+                shape.setColor(BOOST_COLOR.r, BOOST_COLOR.g, BOOST_COLOR.b, 0.35f + 0.5f * fast);
+                shape.circle(t.x, t.y, GameState.TANK_HALF + 5f + 2f * fast, 32);
+            }
+        }
         // anel indicando "este é você"
         Tank me = s.tanks[playerId];
         if (me.alive) {
@@ -447,7 +572,7 @@ public class GameScreen extends ScreenAdapter {
         shape.begin(ShapeRenderer.ShapeType.Filled);
         shape.setColor(0f, 0f, 0f, 0.45f);
         shape.rect(boardX - 10, boardTop - 34 - ranking.length * 22f, boardWidth, 44 + ranking.length * 22f);
-        shape.rect(10, GameState.WORLD_HEIGHT - 92, 320, 82);
+        shape.rect(10, GameState.WORLD_HEIGHT - 114, 320, 104);
         for (int i = 0; i < ranking.length; i++) {
             shape.setColor(TankColors.BODY[ranking[i].id]);
             shape.rect(boardX, boardTop - 46 - i * 22f, 12, 12);
@@ -498,9 +623,30 @@ public class GameScreen extends ScreenAdapter {
         font.setColor(me.alive && me.reload <= 0f ? Color.GREEN : Color.LIGHT_GRAY);
         font.draw(batch, shot, 22, GameState.WORLD_HEIGHT - 72);
 
+        if (me.alive && (me.armor > 0 || me.damageBoost > 0f)) {
+            String bonus = "";
+            if (me.armor > 0) bonus += "Escudo: ATIVO   ";
+            if (me.damageBoost > 0f) bonus += String.format("Dano x2: %.1fs", me.damageBoost);
+            font.setColor(me.damageBoost > 0f ? BOOST_COLOR : ARMOR_COLOR);
+            font.draw(batch, bonus.trim(), 22, GameState.WORLD_HEIGHT - 94);
+        } else {
+            font.setColor(Color.GRAY);
+            font.draw(batch, "Bônus: nenhum", 22, GameState.WORLD_HEIGHT - 94);
+        }
+
+        // textos flutuantes dos power-ups
+        for (FloatingText f : floatingTexts) {
+            float p = f.age / FLOATING_TEXT_TIME;
+            font.setColor(f.color.r, f.color.g, f.color.b, 1f - p);
+            layout.setText(font, f.text);
+            font.draw(batch, layout, f.x - layout.width / 2f, f.y + 30f * p);
+        }
+
         // controles
         font.setColor(0.7f, 0.75f, 0.65f, 0.8f);
         font.draw(batch, "WASD/Setas: mover   Mouse: mirar   Clique/Espaço: atirar   ESC: sair", 14, 22);
+        font.draw(batch, "Power-ups:  Chave = +" + GameState.REPAIR_AMOUNT + " vida   Escudo = bloqueia 1 tiro   Raio (raro) = dano x2 por "
+            + (int) GameState.DAMAGE_BOOST_TIME + "s", 14, 42);
 
         // morto
         if (!me.alive) {

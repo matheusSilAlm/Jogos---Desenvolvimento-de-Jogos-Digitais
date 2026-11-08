@@ -18,7 +18,11 @@ public class Tank {
     public int   hp;
     public float reload;          // segundos até poder atirar de novo (0 = pronto)
     public float respawnTimer;    // segundos até renascer (quando morto)
-    public float shield;          // segundos de invulnerabilidade restantes
+    public float shield;          // segundos de invulnerabilidade restantes (nascimento)
+
+    // ---- power-ups ----
+    public int   armor;           // 1 = escudo extra (quadradinho azul); some ao tomar um tiro
+    public float damageBoost;     // segundos restantes de dano dobrado (0 = sem bônus)
 
     public int kills;
     public int deaths;

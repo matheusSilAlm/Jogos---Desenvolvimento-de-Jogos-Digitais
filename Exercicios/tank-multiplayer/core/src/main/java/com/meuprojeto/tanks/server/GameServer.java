@@ -3,6 +3,7 @@ package com.meuprojeto.tanks.server;
 import com.meuprojeto.tanks.Bullet;
 import com.meuprojeto.tanks.GameState;
 import com.meuprojeto.tanks.PlayerInput;
+import com.meuprojeto.tanks.PowerUp;
 import com.meuprojeto.tanks.Tank;
 
 import java.io.ByteArrayOutputStream;
@@ -11,6 +12,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Iterator;
+import java.util.Random;
 
 /**
  * Servidor autoritativo da Batalha de Tanques.
@@ -32,6 +34,9 @@ public class GameServer {
 
     private static final GameState state = new GameState();
     private static final ClientHandler[] clients = new ClientHandler[GameState.MAX_PLAYERS];
+
+    private static final Random random = new Random();
+    private static float powerUpTimer = GameState.POWERUP_SPAWN_MIN;
 
     public static void main(String[] args) throws IOException {
         ServerSocket serverSocket = new ServerSocket(PORT);
@@ -167,6 +172,7 @@ public class GameServer {
 
             t.shield = Math.max(0f, t.shield - dt);
             t.reload = Math.max(0f, t.reload - dt);
+            t.damageBoost = Math.max(0f, t.damageBoost - dt);
             t.turretAngle = in.aimAngle;
 
             // Movimento só nas 4 direções cardinais
@@ -176,6 +182,8 @@ public class GameServer {
                 tryMove(t, GameState.DIR_X[in.direction] * step, GameState.DIR_Y[in.direction] * step);
             }
 
+            collectPowerUps(t);
+
             // Tiro (respeitando o tempo de recarga)
             if (in.fire && t.reload <= 0f) {
                 fire(t);
@@ -183,6 +191,7 @@ public class GameServer {
         }
 
         updateBullets(dt);
+        updatePowerUps(dt);
     }
 
     private static void tryMove(Tank t, float dx, float dy) {
@@ -207,6 +216,7 @@ public class GameServer {
         b.y = t.barrelTipY();
         b.vx = (float) Math.cos(t.turretAngle) * GameState.BULLET_SPEED;
         b.vy = (float) Math.sin(t.turretAngle) * GameState.BULLET_SPEED;
+        b.damage = t.damageBoost > 0f ? GameState.BOOSTED_DAMAGE : 1;
         state.bullets.add(b);
 
         t.reload = GameState.RELOAD_TIME;
@@ -231,7 +241,7 @@ public class GameServer {
             Tank hit = findHit(b);
             if (hit != null) {
                 it.remove();
-                if (hit.shield <= 0f) damage(hit, b.owner);
+                if (hit.shield <= 0f) damage(hit, b.owner, b.damage);
             }
         }
     }
@@ -245,9 +255,15 @@ public class GameServer {
         return null;
     }
 
-    private static void damage(Tank victim, int shooterId) {
-        victim.hp--;
+    private static void damage(Tank victim, int shooterId, int amount) {
+        // O escudo do power-up absorbe o tiro inteiro (mesmo um tiro de dano dobrado) e some.
+        if (victim.armor > 0) {
+            victim.armor = 0;
+            return;
+        }
+        victim.hp -= amount;
         if (victim.hp > 0) return;
+        victim.hp = 0;
 
         victim.alive = false;
         victim.deaths++;
@@ -284,9 +300,111 @@ public class GameServer {
         t.reload = 0f;
         t.shield = GameState.SPAWN_SHIELD;
         t.respawnTimer = 0f;
+        t.armor = 0;
+        t.damageBoost = 0f;
         // Vira para o centro do campo
         t.facing = t.y < GameState.WORLD_HEIGHT / 2f ? GameState.DIR_UP : GameState.DIR_DOWN;
         t.turretAngle = (float) Math.atan2(GameState.WORLD_HEIGHT / 2f - t.y, GameState.WORLD_WIDTH / 2f - t.x);
+    }
+
+    // ---- POWER-UPS -------------------------------------------------------------
+
+    /** Faz power-ups expirarem e, de tempos em tempos, sorteia um novo no campo. */
+    private static void updatePowerUps(float dt) {
+        Iterator<PowerUp> it = state.powerUps.iterator();
+        while (it.hasNext()) {
+            PowerUp p = it.next();
+            p.ttl -= dt;
+            if (p.ttl <= 0f) it.remove();
+        }
+
+        powerUpTimer -= dt;
+        if (powerUpTimer > 0f) return;
+        powerUpTimer = GameState.POWERUP_SPAWN_MIN
+            + random.nextFloat() * (GameState.POWERUP_SPAWN_MAX - GameState.POWERUP_SPAWN_MIN);
+
+        if (state.powerUps.size() >= GameState.POWERUP_MAX) return;
+        PowerUp p = new PowerUp();
+        if (!findFreeSpot(p)) return;
+        p.type = rollType();
+        p.ttl = GameState.POWERUP_LIFETIME;
+        state.powerUps.add(p);
+    }
+
+    /** Sorteio ponderado: cada tipo tem um peso em POWERUP_WEIGHTS (o de dano é o menor). */
+    private static int rollType() {
+        int total = 0;
+        for (int w : GameState.POWERUP_WEIGHTS) total += w;
+        int r = random.nextInt(total);
+        for (int type = 0; type < GameState.POWERUP_WEIGHTS.length; type++) {
+            r -= GameState.POWERUP_WEIGHTS[type];
+            if (r < 0) return type;
+        }
+        return PowerUp.REPAIR;
+    }
+
+    /** Procura uma posição aleatória longe de tanques vivos e de outros power-ups. */
+    private static boolean findFreeSpot(PowerUp p) {
+        float margin = 60f;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            float x = margin + random.nextFloat() * (GameState.WORLD_WIDTH - 2 * margin);
+            float y = margin + random.nextFloat() * (GameState.WORLD_HEIGHT - 2 * margin);
+            if (isFarFromEverything(x, y)) {
+                p.x = x;
+                p.y = y;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isFarFromEverything(float x, float y) {
+        for (Tank t : state.tanks) {
+            if (!t.active || !t.alive) continue;
+            if (dist2(x, y, t.x, t.y) < 90f * 90f) return false;
+        }
+        for (PowerUp o : state.powerUps) {
+            if (dist2(x, y, o.x, o.y) < 120f * 120f) return false;
+        }
+        return true;
+    }
+
+    /** Pega os power-ups que o tanque está tocando (se o efeito servir para ele agora). */
+    private static void collectPowerUps(Tank t) {
+        float reach = GameState.TANK_HALF + GameState.POWERUP_RADIUS;
+        Iterator<PowerUp> it = state.powerUps.iterator();
+        while (it.hasNext()) {
+            PowerUp p = it.next();
+            if (Math.abs(p.x - t.x) > reach || Math.abs(p.y - t.y) > reach) continue;
+            if (applyPowerUp(t, p.type)) it.remove();
+        }
+    }
+
+    /** Aplica o efeito. Retorna false se não fez nada (ex.: vida cheia) e o item fica no chão. */
+    private static boolean applyPowerUp(Tank t, int type) {
+        switch (type) {
+            case PowerUp.REPAIR:
+                if (t.hp >= GameState.TANK_MAX_HP) return false;
+                t.hp = Math.min(GameState.TANK_MAX_HP, t.hp + GameState.REPAIR_AMOUNT);
+                System.out.println("[Servidor] " + t.name + " pegou REPARO");
+                return true;
+            case PowerUp.ARMOR:
+                if (t.armor > 0) return false;
+                t.armor = 1;
+                System.out.println("[Servidor] " + t.name + " pegou ESCUDO");
+                return true;
+            case PowerUp.DAMAGE:
+                t.damageBoost = GameState.DAMAGE_BOOST_TIME; // pegar outro renova o tempo
+                System.out.println("[Servidor] " + t.name + " pegou DANO x2");
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static float dist2(float ax, float ay, float bx, float by) {
+        float dx = ax - bx, dy = ay - by;
+        return dx * dx + dy * dy;
     }
 
     private static float clamp(float v, float min, float max) {

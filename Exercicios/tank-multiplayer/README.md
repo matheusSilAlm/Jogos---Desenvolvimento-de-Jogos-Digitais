@@ -16,6 +16,19 @@ generalizado de 2 para N jogadores.
   inimigos, com 2 s de escudo (o escudo acaba se ele atirar).
 - Placar com abates/mortes no canto superior direito.
 
+### Power-ups
+A cada 5–9 s aparece um item no campo (máx. 3 ao mesmo tempo; some após 20 s, piscando no
+final). Basta passar por cima com o tanque.
+
+| Item | Chance | Efeito |
+|---|---|---|
+| 🔧 **Chave** (verde) | 45% | Recupera **2 de vida**. Não é consumida se a vida estiver cheia. |
+| 🛡 **Escudo** (azul) | 40% | Ganha **+1 quadradinho azul** na barra de vida. O próximo tiro recebido é absorvido inteiro e o escudo some. Não acumula. |
+| ⚡ **Raio** (laranja) | 15% (raro) | **Dano x2** por 10 s: o tiro fica maior e laranja e tira 2 de vida. Pegar outro renova o tempo. |
+
+Escudo e dano x2 são perdidos ao morrer. Chances, tempos e quantidades ficam em
+`GameState.java` (bloco `POWER-UPS`).
+
 Todas as constantes (velocidades, alcance, recarga, vida, tamanho do campo) ficam no topo de
 `GameState.java`.
 
@@ -31,6 +44,18 @@ máquina do servidor.
 
 Descubra o IP da máquina com `ipconfig` (Windows), ex.: `192.168.0.15`.
 
+**Liberar a porta no firewall do Windows** (uma vez, no PowerShell **como Administrador**):
+```powershell
+New-NetFirewallRule -DisplayName "Tanques 12345" -Direction Inbound -Protocol TCP -LocalPort 12345 -Action Allow
+```
+(equivalente no cmd: `netsh advfirewall firewall add rule name="Tanques 12345" dir=in action=allow protocol=TCP localport=12345`)
+
+**Erro "Address already in use"** (um servidor antigo ainda está rodando):
+```powershell
+netstat -ano | findstr :12345      # o último número da linha LISTENING é o PID
+taskkill /PID <PID> /F
+```
+
 ### 2. Clientes (até 10 máquinas)
 - IntelliJ: rode `Lwjgl3Launcher.main`; **ou** terminal: `./gradlew :lwjgl3:run`
 - Na tela inicial digite o IP do servidor e aperte **ENTER** (`localhost` para testar na
@@ -45,6 +70,7 @@ core/src/main/java/com/meuprojeto/tanks/
 ├── GameState.java      estado + constantes + (de)serialização do snapshot   (sem LibGDX)
 ├── Tank.java           dados de um tanque                                    (sem LibGDX)
 ├── Bullet.java         dados de um projétil                                  (sem LibGDX)
+├── PowerUp.java        item no campo (reparo, escudo, dano)                  (sem LibGDX)
 ├── PlayerInput.java    comando do cliente (direção, mira, tiro)              (sem LibGDX)
 ├── TankClient.java     Game do LibGDX
 ├── ConnectScreen.java  tela para digitar o IP
@@ -79,9 +105,12 @@ Todo frame    (C -> S): byte direção (-1 parado, 0 cima, 1 dir., 2 baixo, 3 es
 A 60 Hz       (S -> C): byte qtdTanques
                           [byte id, boolean vivo, float x, float y, byte facing,
                            float anguloTorre, byte hp, float recarga, float respawn,
-                           float escudo, short abates, short mortes] x qtdTanques
+                           float escudo, byte armadura, float danoX2,
+                           short abates, short mortes] x qtdTanques
                         short qtdProjeteis
-                          [byte dono, float x, float y] x qtdProjeteis
+                          [byte dono, float x, float y, byte dano] x qtdProjeteis
+                        byte qtdPowerUps
+                          [byte tipo, float x, float y, float tempoRestante] x qtdPowerUps
 ```
 `Socket.setTcpNoDelay(true)` dos dois lados para os pacotes pequenos não atrasarem.
 

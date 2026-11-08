@@ -36,6 +36,18 @@ public class GameState {
     public static final float BULLET_RANGE   = 380f;          // distância máxima (não cruza o mapa)
     public static final float BULLET_RADIUS  = 4f;
 
+    // ---- POWER-UPS -----------------------------------------------------------
+    public static final int   REPAIR_AMOUNT       = 2;        // vida que a chave recupera
+    public static final float DAMAGE_BOOST_TIME   = 10f;      // segundos de dano dobrado
+    public static final int   BOOSTED_DAMAGE      = 2;        // dano do tiro com o bônus
+    public static final float POWERUP_RADIUS      = 14f;
+    public static final int   POWERUP_MAX         = 3;        // máximo no campo ao mesmo tempo
+    public static final float POWERUP_SPAWN_MIN   = 5f;       // intervalo entre aparições (s)
+    public static final float POWERUP_SPAWN_MAX   = 9f;
+    public static final float POWERUP_LIFETIME    = 20f;      // some se ninguém pegar
+    /** Chance relativa de cada tipo (índice = PowerUp.REPAIR, ARMOR, DAMAGE). Dano é o mais raro. */
+    public static final int[] POWERUP_WEIGHTS     = { 45, 40, 15 };
+
     // ---- DIREÇÕES CARDINAIS (facing do corpo do tanque) ----------------------
     public static final int DIR_NONE  = -1;
     public static final int DIR_UP    = 0;
@@ -58,6 +70,7 @@ public class GameState {
     /** Um slot por jogador possível; slot.active diz se tem alguém conectado. */
     public final Tank[] tanks = new Tank[MAX_PLAYERS];
     public final List<Bullet> bullets = new ArrayList<Bullet>();
+    public final List<PowerUp> powerUps = new ArrayList<PowerUp>();
 
     public GameState() {
         for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -70,12 +83,15 @@ public class GameState {
      * Snapshot (Servidor -> Cliente), enviado a 60 Hz:
      *   byte  qtdTanquesAtivos
      *   repetido qtdTanquesAtivos vezes:
-     *     byte id, boolean alive, float x, float y, byte facing, float turretAngle,
+     *     byte id, UTF nome, boolean alive, float x, float y, byte facing, float turretAngle,
      *     byte hp, float reload, float respawnTimer, float shield,
-     *     short kills, short deaths
+     *     byte armor, float damageBoost, short kills, short deaths
      *   short qtdProjeteis
      *   repetido qtdProjeteis vezes:
-     *     byte owner, float x, float y
+     *     byte owner, float x, float y, byte damage
+     *   byte qtdPowerUps
+     *   repetido qtdPowerUps vezes:
+     *     byte type, float x, float y, float ttl
      */
     public void write(DataOutputStream out) throws IOException {
         int active = 0;
@@ -95,6 +111,8 @@ public class GameState {
             out.writeFloat(t.reload);
             out.writeFloat(t.respawnTimer);
             out.writeFloat(t.shield);
+            out.writeByte(t.armor);
+            out.writeFloat(t.damageBoost);
             out.writeShort(t.kills);
             out.writeShort(t.deaths);
         }
@@ -104,6 +122,15 @@ public class GameState {
             out.writeByte(b.owner);
             out.writeFloat(b.x);
             out.writeFloat(b.y);
+            out.writeByte(b.damage);
+        }
+
+        out.writeByte(powerUps.size());
+        for (PowerUp p : powerUps) {
+            out.writeByte(p.type);
+            out.writeFloat(p.x);
+            out.writeFloat(p.y);
+            out.writeFloat(p.ttl);
         }
     }
 
@@ -124,6 +151,8 @@ public class GameState {
             t.reload       = in.readFloat();
             t.respawnTimer = in.readFloat();
             t.shield       = in.readFloat();
+            t.armor        = in.readByte();
+            t.damageBoost  = in.readFloat();
             t.kills        = in.readShort();
             t.deaths       = in.readShort();
         }
@@ -131,10 +160,21 @@ public class GameState {
         int bulletCount = in.readUnsignedShort();
         for (int i = 0; i < bulletCount; i++) {
             Bullet b = new Bullet();
-            b.owner = in.readUnsignedByte();
-            b.x     = in.readFloat();
-            b.y     = in.readFloat();
+            b.owner  = in.readUnsignedByte();
+            b.x      = in.readFloat();
+            b.y      = in.readFloat();
+            b.damage = in.readByte();
             s.bullets.add(b);
+        }
+
+        int powerUpCount = in.readUnsignedByte();
+        for (int i = 0; i < powerUpCount; i++) {
+            PowerUp p = new PowerUp();
+            p.type = in.readUnsignedByte();
+            p.x    = in.readFloat();
+            p.y    = in.readFloat();
+            p.ttl  = in.readFloat();
+            s.powerUps.add(p);
         }
         return s;
     }
