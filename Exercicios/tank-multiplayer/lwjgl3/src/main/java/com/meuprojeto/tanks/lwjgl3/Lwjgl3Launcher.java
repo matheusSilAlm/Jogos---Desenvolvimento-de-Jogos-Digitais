@@ -17,6 +17,8 @@ public class Lwjgl3Launcher {
         config.setResizable(true);
         config.useVsync(true);
         config.setForegroundFPS(60);
+        // até 10 tanques atirando/explodindo ao mesmo tempo + motor + música: mais canais que o padrão (16)
+        config.setAudioConfig(32, 512, 9);
         config.setWindowIcon("libgdx128.png", "libgdx64.png", "libgdx32.png", "libgdx16.png");
         new Lwjgl3Application(new TankClient(host), config);
     }

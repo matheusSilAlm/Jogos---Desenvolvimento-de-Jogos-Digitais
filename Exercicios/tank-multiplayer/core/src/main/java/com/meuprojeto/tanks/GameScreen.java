@@ -83,6 +83,13 @@ public class GameScreen extends ScreenAdapter {
     private final List<FloatingText> floatingTexts = new ArrayList<FloatingText>();
     private static final float FLOATING_TEXT_TIME = 1.2f;
 
+    // ---- som (também deduzido comparando snapshots) ----
+    private final AudioManager audio;
+    private final boolean[] prevActive = new boolean[GameState.MAX_PLAYERS];
+    private final float[] prevReload = new float[GameState.MAX_PLAYERS];
+    private final int[] prevKills = new int[GameState.MAX_PLAYERS];
+    private int prevPowerUpCount;
+
     // ---- cores dos power-ups (índice = PowerUp.REPAIR, ARMOR, DAMAGE) ----
     private static final Color[] POWERUP_COLORS = {
         new Color(0.30f, 0.85f, 0.40f, 1f), // reparo: verde
@@ -112,6 +119,7 @@ public class GameScreen extends ScreenAdapter {
         this.game = game;
         this.host = host;
         this.playerName = (playerName != null && !playerName.trim().isEmpty()) ? playerName.trim() : "Jogador";
+        this.audio = game.getAudio();
 
         viewport = new FitViewport(GameState.WORLD_WIDTH, GameState.WORLD_HEIGHT);
         shape = new ShapeRenderer();
@@ -200,6 +208,7 @@ public class GameScreen extends ScreenAdapter {
 
         if (error != null) { backToMenu(error); return; }
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) { backToMenu(null); return; }
+        if (Gdx.input.isKeyJustPressed(Input.Keys.M)) audio.toggleMute();
 
         GameState s = latest;
         if (s == null || playerId < 0) {
@@ -207,9 +216,13 @@ public class GameScreen extends ScreenAdapter {
             return;
         }
 
+        // partida rolando: a música de batalha fica em loop até sair desta tela
+        audio.keepBattleMusicPlaying();
+
         Tank me = s.tanks[playerId];
         readInput(me);
         sendInput();
+        audio.updateEngine(me.alive && input.direction != GameState.DIR_NONE, delta);
         updateEffects(s, delta);
 
         Gdx.gl.glEnable(GL20.GL_BLEND);
@@ -258,27 +271,66 @@ public class GameScreen extends ScreenAdapter {
         return Gdx.input.isKeyPressed(DIR_KEYS[d][0]) || Gdx.input.isKeyPressed(DIR_KEYS[d][1]);
     }
 
-    /** Detecta acertos e mortes comparando o snapshot novo com o anterior. */
+    /** Detecta tiros, acertos, mortes e power-ups comparando o snapshot novo com o anterior. */
     private void updateEffects(GameState s, float delta) {
         if (s != lastProcessed) {
+            Tank me = s.tanks[playerId];
+            audio.setListener(me.x, me.y);
+
             for (Tank t : s.tanks) {
                 int i = t.id;
                 if (t.active) {
-                    if (prevAlive[i] && !t.alive) explosions.add(new float[] { t.x, t.y, 0f, KIND_EXPLOSION });
+                    if (prevAlive[i] && !t.alive) {
+                        explosions.add(new float[] { t.x, t.y, 0f, KIND_EXPLOSION });
+                        audio.playExplosion(t.x, t.y);
+                    }
                     if (prevAlive[i] && t.alive) {
-                        if (t.hp < prevHp[i]) hitFlash[i] = 0.15f;
+                        // tiro: ao atirar, o servidor joga a recarga de volta para RELOAD_TIME
+                        if (t.reload > prevReload[i] + 0.5f) audio.playShot(t.barrelTipX(), t.barrelTipY(), t.damageBoost > 0f);
+                        if (t.hp < prevHp[i]) {
+                            hitFlash[i] = 0.15f;
+                            audio.playHit(t.x, t.y);
+                        }
                         // power-ups coletados / escudo quebrado
-                        if (t.hp > prevHp[i]) addFloatingText("+" + (t.hp - prevHp[i]) + " VIDA", POWERUP_COLORS[PowerUp.REPAIR], t);
-                        if (t.armor > prevArmor[i]) addFloatingText("+ESCUDO", ARMOR_COLOR, t);
-                        if (t.armor < prevArmor[i]) explosions.add(new float[] { t.x, t.y, 0f, KIND_SHIELD_BREAK });
-                        if (t.damageBoost > prevBoost[i] + 0.5f) addFloatingText("DANO x2!", BOOST_COLOR, t);
+                        if (t.hp > prevHp[i]) {
+                            addFloatingText("+" + (t.hp - prevHp[i]) + " VIDA", POWERUP_COLORS[PowerUp.REPAIR], t);
+                            audio.playPickup(PowerUp.REPAIR, t.x, t.y);
+                        }
+                        if (t.armor > prevArmor[i]) {
+                            addFloatingText("+ESCUDO", ARMOR_COLOR, t);
+                            audio.playPickup(PowerUp.ARMOR, t.x, t.y);
+                        }
+                        if (t.armor < prevArmor[i]) {
+                            explosions.add(new float[] { t.x, t.y, 0f, KIND_SHIELD_BREAK });
+                            audio.playShieldBreak(t.x, t.y);
+                        }
+                        if (t.damageBoost > prevBoost[i] + 0.5f) {
+                            addFloatingText("DANO x2!", BOOST_COLOR, t);
+                            audio.playPickup(PowerUp.DAMAGE, t.x, t.y);
+                        }
+                    }
+                    // sons que só você ouve
+                    if (i == playerId && prevActive[i]) {
+                        if (!prevAlive[i] && t.alive) audio.playRespawn();
+                        if (prevAlive[i] && t.alive && prevReload[i] > 0f && t.reload <= 0f && !input.fire) audio.playReloadReady();
+                        if (t.kills > prevKills[i]) audio.playKill();
                     }
                 }
+                prevActive[i] = t.active;
                 prevAlive[i] = t.active && t.alive;
                 prevHp[i] = t.hp;
                 prevArmor[i] = t.armor;
                 prevBoost[i] = t.damageBoost;
+                prevReload[i] = t.reload;
+                prevKills[i] = t.kills;
             }
+
+            // power-up novo no campo (o servidor sempre adiciona no fim da lista)
+            if (lastProcessed != null && s.powerUps.size() > prevPowerUpCount) {
+                PowerUp p = s.powerUps.get(s.powerUps.size() - 1);
+                audio.playPowerUpSpawn(p.x, p.y);
+            }
+            prevPowerUpCount = s.powerUps.size();
             lastProcessed = s;
         }
 
@@ -644,7 +696,8 @@ public class GameScreen extends ScreenAdapter {
 
         // controles
         font.setColor(0.7f, 0.75f, 0.65f, 0.8f);
-        font.draw(batch, "WASD/Setas: mover   Mouse: mirar   Clique/Espaço: atirar   ESC: sair", 14, 22);
+        font.draw(batch, "WASD/Setas: mover   Mouse: mirar   Clique/Espaço: atirar   ESC: sair   M: "
+            + (audio.isMuted() ? "ligar som (MUDO)" : "silenciar"), 14, 22);
         font.draw(batch, "Power-ups:  Chave = +" + GameState.REPAIR_AMOUNT + " vida   Escudo = bloqueia 1 tiro   Raio (raro) = dano x2 por "
             + (int) GameState.DAMAGE_BOOST_TIME + "s", 14, 42);
 
@@ -694,8 +747,15 @@ public class GameScreen extends ScreenAdapter {
         viewport.update(width, height, true);
     }
 
+    /** Saiu da partida (menu, conexão caiu ou janela fechando): a música para aqui. */
+    @Override
+    public void hide() {
+        audio.stopMatchAudio();
+    }
+
     @Override
     public void dispose() {
+        audio.stopMatchAudio();
         closeSocket();
         shape.dispose();
         batch.dispose();
